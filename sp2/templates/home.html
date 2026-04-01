@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-md-8">
+    <div class="card shadow-sm">
+      <div class="card-header card-header-portal">
+        <h5 class="mb-0">🏠 Dashboard — Portal B</h5>
+      </div>
+      <div class="card-body">
+        <p class="lead">Bem-vindo, <strong>{{ user.preferred_username }}</strong>!</p>
+
+        <div class="alert alert-success">
+          ✅ <strong>SSO activo!</strong> Se chegaste aqui vindo do Portal A sem
+          introduzir credenciais, o Single Sign-On está a funcionar correctamente.
+        </div>
+
+        <table class="table table-bordered table-sm">
+          <tr><th>Username</th><td>{{ user.preferred_username }}</td></tr>
+          <tr><th>Email</th><td>{{ user.email }}</td></tr>
+          <tr><th>Roles</th><td>
+            {% for role in user.get('roles', []) %}
+              <span class="badge bg-{% if role == 'admin' %}danger{% else %}secondary{% endif %}">{{ role }}</span>
+            {% endfor %}
+          </td></tr>
+          <tr><th>Client</th><td><code>sp2-client</code></td></tr>
+        </table>
+
+        <div class="d-flex gap-2 mt-3">
+          <a href="/profile" class="btn btn-outline-success btn-sm">Ver Tokens</a>
+          {% if 'admin' in user.get('roles', []) %}
+            <a href="/admin" class="btn btn-danger btn-sm">Área Admin</a>
+          {% endif %}
+          <a href="http://localhost:5001" class="btn btn-outline-primary btn-sm">← Voltar ao Portal A</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

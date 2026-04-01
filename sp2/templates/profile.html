@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Perfil{% endblock %}
+{% block content %}
+<div class="card shadow-sm">
+  <div class="card-header card-header-portal"><h5 class="mb-0">👤 Perfil</h5></div>
+  <div class="card-body">
+    <pre class="bg-light p-3 rounded" style="font-size:0.8rem">{{ user | tojson(indent=2) }}</pre>
+    <a href="/" class="btn btn-secondary btn-sm mt-2">← Dashboard</a>
+  </div>
+</div>
+{% endblock %}

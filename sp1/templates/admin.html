@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Área Admin{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm border-danger">
+  <div class="card-header bg-danger text-white">
+    <h5 class="mb-0">🔴 Área de Administração — Acesso Restrito</h5>
+  </div>
+  <div class="card-body">
+    <p>Bem-vindo, <strong>{{ user.preferred_username }}</strong>.
+       Tens acesso a esta área porque tens o role <span class="badge bg-danger">admin</span>.</p>
+
+    <div class="alert alert-warning">
+      <strong>Dados sensíveis do sistema:</strong>
+      <ul class="mb-0 mt-2">
+        <li>Número de utilizadores activos: <strong>3</strong></li>
+        <li>Última autenticação: <strong>{{ user.preferred_username }}</strong></li>
+        <li>Realm: <strong>gid-lab</strong></li>
+        <li>IdP: <strong>Keycloak @ localhost:8080</strong></li>
+      </ul>
+    </div>
+
+    <a href="/" class="btn btn-secondary btn-sm">← Voltar ao Dashboard</a>
+  </div>
+</div>
+{% endblock %}

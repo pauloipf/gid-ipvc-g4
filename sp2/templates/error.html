@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Erro{% endblock %}
+{% block content %}
+<div class="card border-danger shadow-sm">
+  <div class="card-header bg-danger text-white">Acesso Negado</div>
+  <div class="card-body">
+    <p class="lead">{{ message }}</p>
+    <a href="/" class="btn btn-secondary btn-sm">← Voltar</a>
+  </div>
+</div>
+{% endblock %}

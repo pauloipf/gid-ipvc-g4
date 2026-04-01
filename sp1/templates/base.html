@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Portal A{% endblock %} — GID Lab G4</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background-color: #f0f4ff; }
+    .navbar { background-color: #1a237e !important; }
+    .navbar-brand, .nav-link { color: #fff !important; }
+    .badge-role { font-size: 0.75rem; }
+    .vuln-banner {
+      background: #fff3cd; border-left: 4px solid #ffc107;
+      padding: 8px 16px; font-size: 0.85rem; font-family: monospace;
+    }
+    .card-header-portal { background-color: #1a237e; color: white; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg">
+  <div class="container">
+    <a class="navbar-brand fw-bold" href="/">🔵 Portal A &nbsp;<small class="text-info fs-6">SP1</small></a>
+    <div class="ms-auto d-flex align-items-center gap-3">
+      {% if user %}
+        <span class="text-white">{{ user.preferred_username }}</span>
+        {% for role in user.get('roles', []) %}
+          <span class="badge bg-{% if role == 'admin' %}danger{% else %}secondary{% endif %} badge-role">{{ role }}</span>
+        {% endfor %}
+        <a href="/profile" class="btn btn-outline-light btn-sm">Perfil</a>
+        {% if 'admin' in user.get('roles', []) %}
+          <a href="/admin" class="btn btn-warning btn-sm">Admin</a>
+        {% endif %}
+        <a href="http://localhost:5002" class="btn btn-outline-info btn-sm">→ Portal B</a>
+        <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+      {% endif %}
+    </div>
+  </div>
+</nav>
+
+<div class="container mt-4">
+  {% block content %}{% endblock %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

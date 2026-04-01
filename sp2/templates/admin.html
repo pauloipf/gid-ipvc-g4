@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Área Admin{% endblock %}
+{% block content %}
+<div class="card border-danger shadow-sm">
+  <div class="card-header bg-danger text-white">
+    <h5 class="mb-0">🔴 Administração — Portal B</h5>
+  </div>
+  <div class="card-body">
+    <p>Bem-vindo, <strong>{{ user.preferred_username }}</strong> (role <span class="badge bg-danger">admin</span>).</p>
+    <a href="/" class="btn btn-secondary btn-sm">← Dashboard</a>
+  </div>
+</div>
+{% endblock %}
