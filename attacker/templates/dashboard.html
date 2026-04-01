@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attacker Dashboard — GID Lab</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #1a1a2e; color: #e0e0e0; font-family: 'Courier New', monospace; }
+    .navbar { background: #0d0d1a !important; border-bottom: 2px solid #ff0000; }
+    .navbar-brand { color: #ff4444 !important; font-weight: bold; font-size: 1.2rem; }
+    .card { background: #16213e; border: 1px solid #333; }
+    .card-header { background: #0f3460 !important; }
+    .badge-a06 { background-color: #e74c3c; }
+    .badge-a07 { background-color: #e67e22; }
+    .badge-a09 { background-color: #9b59b6; }
+    .event-row { border-left: 3px solid #e74c3c; margin-bottom: 8px; padding: 8px 12px; background: #0d0d1a; border-radius: 4px; font-size: 0.82rem; }
+    .event-row.a07 { border-left-color: #e67e22; }
+    .event-row.a09 { border-left-color: #9b59b6; }
+    .token-highlight { color: #2ecc71; font-weight: bold; word-break: break-all; }
+    .timestamp { color: #7f8c8d; font-size: 0.75rem; }
+    .details-pre { background: #0a0a1a; color: #00ff41; padding: 8px; border-radius: 4px; font-size: 0.75rem; white-space: pre-wrap; word-break: break-all; margin: 4px 0 0 0; }
+    .counter-badge { font-size: 1.5rem; font-weight: bold; color: #ff4444; }
+    .blink { animation: blink-animation 1s step-start infinite; }
+    @keyframes blink-animation { 50% { opacity: 0; } }
+    #refresh-indicator { font-size: 0.7rem; color: #555; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark mb-4">
+  <div class="container-fluid">
+    <span class="navbar-brand">&#x1F534; ATTACKER DASHBOARD — GID Lab Grupo 4</span>
+    <div class="d-flex align-items-center gap-3">
+      <span id="refresh-indicator">&#x21BB; auto-refresh</span>
+      <span class="badge bg-danger fs-6" id="event-count">{{ events | length }}</span>
+      <a href="/clear" class="btn btn-outline-danger btn-sm" onclick="return confirm('Limpar todos os eventos?')">&#x1F5D1; Limpar</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container-fluid px-4">
+
+  <!-- Estatísticas -->
+  {%- set c06 = namespace(n=0) -%}
+  {%- set c07 = namespace(n=0) -%}
+  {%- set c09 = namespace(n=0) -%}
+  {%- for e in events -%}
+    {%- if 'A-06' in e.attack -%}{%- set c06.n = c06.n + 1 -%}{%- endif -%}
+    {%- if 'A-07' in e.attack -%}{%- set c07.n = c07.n + 1 -%}{%- endif -%}
+    {%- if 'A-09' in e.attack -%}{%- set c09.n = c09.n + 1 -%}{%- endif -%}
+  {%- endfor -%}
+  <div class="row mb-4">
+    <div class="col-md-4">
+      <div class="card text-center py-3">
+        <div class="counter-badge" id="count-a06">{{ c06.n }}</div>
+        <div class="text-danger small">A-06 Token via Referer</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card text-center py-3">
+        <div class="counter-badge" style="color:#e67e22" id="count-a07">{{ c07.n }}</div>
+        <div class="text-warning small">A-07 Open Redirect / Phishing</div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card text-center py-3">
+        <div class="counter-badge" style="color:#9b59b6" id="count-a09">{{ c09.n }}</div>
+        <div class="text-info small" style="color:#9b59b6 !important">A-09 Session Fixation</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lista de eventos -->
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>&#x1F4E1; Eventos Capturados</span>
+      <span class="text-muted small">mais recente primeiro</span>
+    </div>
+    <div class="card-body p-3" id="events-container">
+      {% if not events %}
+        <div class="text-center text-muted py-4" id="no-events">
+          <div style="font-size:2rem">&#x1F4A4;</div>
+          <div>Aguardando eventos... <span class="blink">_</span></div>
+          <div class="small mt-1">Inicie um ataque nos Portais A ou B para ver capturas aqui.</div>
+        </div>
+      {% endif %}
+
+      {% for event in events %}
+        {% set attack_class = 'a07' if 'A-07' in event.attack else ('a09' if 'A-09' in event.attack else '') %}
+        <div class="event-row {{ attack_class }}">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <span class="badge {{ 'badge-a07 bg-warning text-dark' if 'A-07' in event.attack else ('bg-info text-dark' if 'A-09' in event.attack else 'bg-danger') }}">
+                {{ event.attack }}
+              </span>
+              <span class="ms-2 text-light small">{{ event.source }}</span>
+            </div>
+            <div class="text-end">
+              <span class="timestamp">{{ event.timestamp }}</span>
+              <span class="badge bg-secondary ms-1">#{{ event.id }}</span>
+              <span class="badge bg-dark ms-1">{{ event.source_ip }}</span>
+            </div>
+          </div>
+          <pre class="details-pre">{{ event.details }}</pre>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Legenda / Instruções -->
+  <div class="row mt-4 mb-5">
+    <div class="col-md-12">
+      <div class="card">
+        <div class="card-header">&#x1F4CB; Instruções de Demonstração</div>
+        <div class="card-body small">
+          <div class="row">
+            <div class="col-md-4">
+              <span class="badge bg-danger">A-06</span>
+              <strong class="ms-1 text-danger">Token via Referer</strong>
+              <ol class="mt-1 ps-3 text-secondary">
+                <li>SP1 deve ter <code>VULN_A06=True</code></li>
+                <li>Faz login em <a href="http://localhost:5001" target="_blank" class="text-warning">Portal A</a></li>
+                <li>O token aparece nos eventos acima</li>
+              </ol>
+            </div>
+            <div class="col-md-4">
+              <span class="badge bg-warning text-dark">A-07</span>
+              <strong class="ms-1 text-warning">Open Redirect</strong>
+              <ol class="mt-1 ps-3 text-secondary">
+                <li>SP1 deve ter <code>VULN_A07=True</code></li>
+                <li>Acede: <code>localhost:5001/login?next=http://localhost:9999/malicious</code></li>
+                <li>Depois do login, o browser é redireccionado aqui</li>
+              </ol>
+            </div>
+            <div class="col-md-4">
+              <span class="badge" style="background:#9b59b6">A-09</span>
+              <strong class="ms-1" style="color:#9b59b6">Session Fixation</strong>
+              <ol class="mt-1 ps-3 text-secondary">
+                <li>SP1 deve ter <code>VULN_A09=True</code></li>
+                <li>Atacante visita SP1, copia <code>sp1_session</code> cookie</li>
+                <li>Vítima usa o mesmo cookie, faz login</li>
+                <li>Atacante acede ao SP1 com o cookie fixo</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // Auto-refresh a cada 3 segundos
+  let lastCount = {{ events | length }};
+
+  async function refresh() {
+    try {
+      const res = await fetch('/api/events');
+      const events = await res.json();
+
+      document.getElementById('event-count').textContent = events.length;
+
+      // Atualizar contadores por ataque
+      document.getElementById('count-a06').textContent =
+        events.filter(e => e.attack.includes('A-06')).length;
+      document.getElementById('count-a07').textContent =
+        events.filter(e => e.attack.includes('A-07')).length;
+      document.getElementById('count-a09').textContent =
+        events.filter(e => e.attack.includes('A-09')).length;
+
+      // Se houve novos eventos, recarregar para mostrar HTML renderizado
+      if (events.length !== lastCount) {
+        lastCount = events.length;
+        location.reload();
+      }
+
+      // Indicador de refresh
+      const ind = document.getElementById('refresh-indicator');
+      ind.textContent = '↻ ' + new Date().toLocaleTimeString('pt-PT');
+    } catch (e) {
+      document.getElementById('refresh-indicator').textContent = '⚠ offline';
+    }
+  }
+
+  setInterval(refresh, 3000);
+</script>
+
+</body>
+</html>
