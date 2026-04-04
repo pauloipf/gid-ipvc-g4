@@ -40,7 +40,7 @@ Laboratório de Gestão de Identidade Digital (IPVC — Mestrado em Ciberseguran
 
 ```bash
 # 1. Clonar o repositório
-git clone [<repo-url>](https://github.com/pauloipf/gid-ipvc-g4.git) && cd gid-ipvc
+git clone https://github.com/pauloipf/gid-ipvc-g4.git && cd gid-ipvc
 
 # 2. Criar venv e instalar dependências
 python3 -m venv venv && source venv/bin/activate
@@ -71,7 +71,7 @@ Seguindo o guia oficial: https://www.keycloak.org/getting-started/getting-starte
 
 ```bash
 # 1. Clonar o repositório no VPS
-git clone [<repo-url>](https://github.com/pauloipf/gid-ipvc-g4.git) && cd gid-ipvc
+git clone https://github.com/pauloipf/gid-ipvc-g4.git && cd gid-ipvc
 
 # 2. Criar venv e instalar dependências
 python3 -m venv venv && source venv/bin/activate
