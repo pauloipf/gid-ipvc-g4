@@ -24,6 +24,13 @@
     .blink { animation: blink-animation 1s step-start infinite; }
     @keyframes blink-animation { 50% { opacity: 0; } }
     #refresh-indicator { font-size: 0.7rem; color: #555; }
+    .btn-copy {
+      background: #1a472a; color: #2ecc71; border: 1px solid #2ecc71;
+      font-size: 0.72rem; padding: 2px 10px; border-radius: 4px;
+      cursor: pointer; font-family: monospace; transition: all 0.2s;
+    }
+    .btn-copy:hover { background: #2ecc71; color: #000; }
+    .btn-copy.copied { background: #2ecc71; color: #000; border-color: #2ecc71; }
   </style>
 </head>
 <body>
@@ -96,10 +103,17 @@
               </span>
               <span class="ms-2 text-light small">{{ event.source }}</span>
             </div>
-            <div class="text-end">
+            <div class="text-end d-flex align-items-center gap-2 flex-wrap justify-content-end">
+              {% if event.token %}
+              <button
+                class="btn btn-copy btn-sm"
+                title="Copiar token completo"
+                onclick="copyToken(this, '{{ event.token }}')"
+              >&#x1F4CB; Copiar Token</button>
+              {% endif %}
               <span class="timestamp">{{ event.timestamp }}</span>
-              <span class="badge bg-secondary ms-1">#{{ event.id }}</span>
-              <span class="badge bg-dark ms-1">{{ event.source_ip }}</span>
+              <span class="badge bg-secondary">#{{ event.id }}</span>
+              <span class="badge bg-dark">{{ event.source_ip }}</span>
             </div>
           </div>
           <pre class="details-pre">{{ event.details }}</pre>
@@ -152,6 +166,34 @@
 </div>
 
 <script>
+  // Copiar token para a área de transferência
+  function copyToken(btn, token) {
+    navigator.clipboard.writeText(token).then(function() {
+      btn.textContent = '✅ Copiado!';
+      btn.classList.add('copied');
+      setTimeout(function() {
+        btn.textContent = '📋 Copiar Token';
+        btn.classList.remove('copied');
+      }, 2000);
+    }).catch(function() {
+      // Fallback para browsers sem clipboard API
+      const ta = document.createElement('textarea');
+      ta.value = token;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      btn.textContent = '✅ Copiado!';
+      btn.classList.add('copied');
+      setTimeout(function() {
+        btn.textContent = '📋 Copiar Token';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }
+
   // Auto-refresh a cada 3 segundos
   let lastCount = {{ events | length }};
 

