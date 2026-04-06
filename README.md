@@ -142,7 +142,7 @@ sp1/config.py → VULN_A09_NO_SESSION_REGEN = True
 python attacks/a09_session_fixation.py
 ```
 
-Ver guia completo: [attacks/a09_session_fixation.py](attacks/a09_session_fixation.py)
+Ver guia completo: [attacks/a09_session_fixation.md](attacks/a09_session_fixation.md)
 
 ---
 
