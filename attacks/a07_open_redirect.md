@@ -28,7 +28,7 @@ sequenceDiagram
     participant KC as Keycloak :8080
     actor ATK as Atacante :9999
 
-    Note over V: Clica no link malicioso:<br/>localhost:5001/login?next=localhost:9999/malicious
+    Note over V: Clica no link malicioso:<br/>http://localhost:5001/login?next=localhost:9999/malicious
 
     V->>SP1: GET /login?next=http://localhost:9999/malicious
     Note over SP1: session["next_url"] = "http://.../malicious"<br/>(sem validação — VULN_A07=True)
