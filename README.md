@@ -6,6 +6,13 @@ Laboratório de Gestão de Identidade Digital (IPVC — Mestrado em Ciberseguran
 **Protocolo:** OpenID Connect (OIDC) via Keycloak
 **Stack:** Python Flask + Keycloak IdP
 
+# Alunos participantes
+- Iúri Carlos Carvalho Laranjeira de Sousa
+- Gonçalo Miguel Campos de Magalhães
+- Thais Cristine Lopes Pinheiro Camêlo
+- Paulo Ivar Peruzzo Filho 
+
+
 ---
 
 ## Arquitectura
