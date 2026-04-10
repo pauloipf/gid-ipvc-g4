@@ -1,34 +1,36 @@
 # GID Lab — Grupo 4
 
-Laboratório de Gestão de Identidade Digital (IPVC — Mestrado em Cibersegurança).
+Laboratório de Gestão de Identidade Digital  
+IPVC — Mestrado em Cibersegurança
 
-**Ataques demonstrados:** A-06 · A-07 · A-09
-**Protocolo:** OpenID Connect (OIDC) via Keycloak
+**Ataques demonstrados:** A-06 · A-07 · A-09  
+**Protocolo:** OpenID Connect (OIDC) via Keycloak  
 **Stack:** Python Flask + Keycloak IdP
 
-# Alunos participantes
+---
+
+## Alunos
+
 - Iúri Carlos Carvalho Laranjeira de Sousa
 - Gonçalo Miguel Campos de Magalhães
 - Thais Cristine Lopes Pinheiro Camêlo
-- Paulo Ivar Peruzzo Filho 
-
+- Paulo Ivar Peruzzo Filho
 
 ---
 
 ## Arquitectura
 
 ```
-[Keycloak IdP]  :8080
-      ↕ OIDC
-[SP1 — Portal A]      :5001   (vulnerável — A-06, A-07, A-09)
-[SP2 — Portal B]      :5002   (SSO demo)
-[Attacker Server]     :9999   (captura eventos dos ataques)
+[Keycloak IdP]        :8080   Identity Provider (OIDC)
+[SP1 — Portal A]      :5001   Service Provider vulnerável (A-06, A-07, A-09)
+[SP2 — Portal B]      :5002   Service Provider SSO demo
+[Attacker Server]     :9999   Captura eventos dos ataques
 ```
 
 **Utilizadores de teste:**
 
-| User | Password | Roles |
-|------|----------|-------|
+| Utilizador | Password | Roles |
+|------------|----------|-------|
 | alice | alice123 | admin, user |
 | bob | bob123 | user |
 | attacker | attacker123 | user |
@@ -39,32 +41,37 @@ Laboratório de Gestão de Identidade Digital (IPVC — Mestrado em Ciberseguran
 
 - Python 3.10+
 - Java 17+ (para o Keycloak)
-- Git
+- Docker (opcional — modo A)
 
 ---
 
-## Modo A — Docker (Mac / desenvolvimento local)
+## Instalação
 
 ```bash
 # 1. Clonar o repositório
-git clone https://github.com/pauloipf/gid-ipvc-g4.git && cd gid-ipvc
+git clone https://github.com/pauloipf/gid-ipvc-g4.git
+cd gid-ipvc-g4
 
 # 2. Criar venv e instalar dependências
 python3 -m venv venv && source venv/bin/activate
 pip install -r sp1/requirements.txt \
             -r sp2/requirements.txt \
             -r attacker/requirements.txt
+```
 
-# 3. Iniciar Keycloak via Docker
+---
+
+## Modo A — Keycloak via Docker Compose
+
+```bash
+# Iniciar Keycloak
 docker-compose up -d
 
-# 4. Importar realm
-#    Admin console → http://localhost:8080
-#    Credenciais: admin / admin
-#    Realm → Create realm → Import → keycloak/realm-export.json
+# Importar realm
+# Admin console → http://localhost:8080  (admin / admin)
+# Realm → Create realm → Import → keycloak/realm-export.json
 
-# 5. Iniciar serviços Flask (3 terminais separados)
-source venv/bin/activate
+# Iniciar serviços Flask (3 terminais)
 python sp1/app.py       # Portal A  → http://localhost:5001
 python sp2/app.py       # Portal B  → http://localhost:5002
 python attacker/app.py  # Attacker  → http://localhost:9999
@@ -72,90 +79,93 @@ python attacker/app.py  # Attacker  → http://localhost:9999
 
 ---
 
-## Modo B — VPS Linux com Keycloak via OpenJDK (zip)
-
-Seguindo o guia oficial: https://www.keycloak.org/getting-started/getting-started-zip
+## Modo B — VPS com Keycloak via OpenJDK
 
 ```bash
-# 1. Clonar o repositório no VPS
-git clone https://github.com/pauloipf/gid-ipvc-g4.git && cd gid-ipvc
-
-# 2. Criar venv e instalar dependências
-python3 -m venv venv && source venv/bin/activate
-pip install -r sp1/requirements.txt \
-            -r sp2/requirements.txt \
-            -r attacker/requirements.txt
-
-# 3. Iniciar Keycloak (directório de instalação varia)
-#    Substituir pelo caminho real do Keycloak instalado
+# Iniciar Keycloak (ajustar caminho conforme instalação)
 cd ~/keycloak-*/
 bin/kc.sh start-dev --http-port=8080 &
 cd -
 
-# 4. Importar realm
-#    Admin console → http://localhost:8080
-#    Credenciais: admin / admin
-#    Realm → Create realm → Import → keycloak/realm-export.json
+# Importar realm
+# Admin console → http://localhost:8080  (admin / admin)
+# Realm → Create realm → Import → keycloak/realm-export.json
 
-# 5. Iniciar todos os serviços Flask de uma vez
-mkdir -p logs
+# Iniciar todos os serviços Flask
 bash start.sh
 
-# Para parar
+# Parar todos os serviços
 bash stop.sh
 ```
 
-**Logs** ficam em `logs/sp1.log`, `logs/sp2.log`, `logs/attacker.log`.
+Logs disponíveis em `logs/sp1.log`, `logs/sp2.log`, `logs/attacker.log`.
 
 ---
 
 ## Demonstração dos Ataques
 
-### A-06 — Token Leakage via Referrer
+As flags de vulnerabilidade estão em `sp1/config.py`.  
+Todas as flags a `False` por defeito (modo seguro).
 
+### A-06 — Token Leakage via Referrer Header
+
+```python
+# sp1/config.py
+VULN_A06_REFERRER_LEAK = True
 ```
-sp1/config.py → VULN_A06_REFERRER_LEAK = True
-```
 
-1. Login em http://localhost:5001 com alice / alice123
-2. Observar o evento A-06 no Attacker Dashboard: http://localhost:9999
+1. Reiniciar SP1
+2. Login em `http://localhost:5001` com `alice` / `alice123`
+3. O Attacker Dashboard (`http://localhost:9999`) mostra o token capturado via header `Referer`
+4. Usar o token: `python attacks/a06_use_token.py <token>`
 
-Ver guia completo: [attacks/a06_referrer.md](attacks/a06_referrer.md)
+Guia completo: [docs/logbook-a06.md](docs/logbook-a06.md)
 
 ---
 
-### A-07 — Open Redirect
+### A-07 — Open Redirect / Phishing
 
-```
-sp1/config.py → VULN_A07_OPEN_REDIRECT = True
+```python
+# sp1/config.py
+VULN_A07_OPEN_REDIRECT = True
 ```
 
-1. Aceder ao URL malicioso:
+1. Reiniciar SP1
+2. Enviar à vítima o link malicioso:  
    `http://localhost:5001/login?next=http://localhost:9999/malicious`
-2. Fazer login com bob / bob123
-3. Browser é redireccionado para a página de phishing em :9999
+3. Vítima faz login com `bob` / `bob123`
+4. Browser é redireccionado para a página de phishing em `:9999`
+5. Credenciais capturadas no Attacker Dashboard
 
-Ver guia completo: [attacks/a07_open_redirect.md](attacks/a07_open_redirect.md)
-
----
-
-### A-09 — Session Fixation
-
-```
-sp1/config.py → VULN_A09_NO_SESSION_REGEN = True
-```
-
-```bash
-python attacks/a09_session_fixation.py
-```
-
-Ver guia completo: [attacks/a09_session_fixation.md](attacks/a09_session_fixation.md)
+Guia completo: [docs/logbook-a07.md](docs/logbook-a07.md)
 
 ---
 
-## Mitigações (Passo 7)
+### A-09 — Session Fixation after SSO
 
-Para activar as mitigações, editar `sp1/config.py`:
+```python
+# sp1/config.py
+VULN_A09_NO_SESSION_REGEN = True
+```
+
+1. Reiniciar SP1
+2. Correr o script do atacante:
+   ```bash
+   python attacks/a09_session_fixation.py
+   ```
+3. No browser da vítima — seguir as instruções do script:
+   - Abrir `http://localhost:5001` (landing page)
+   - Substituir o cookie `sp1_session` pelo valor do atacante (DevTools → Application → Cookies)
+   - Navegar novamente para `http://localhost:5001` e fazer login com `bob` / `bob123`
+4. O script deteta o acesso autenticado e exibe o cookie para o atacante usar
+
+Guia completo: [docs/logbook-a09.md](docs/logbook-a09.md)
+
+---
+
+## Mitigações
+
+Para activar todas as mitigações, editar `sp1/config.py`:
 
 ```python
 VULN_A06_REFERRER_LEAK    = False
@@ -163,7 +173,7 @@ VULN_A09_NO_SESSION_REGEN = False
 VULN_A07_OPEN_REDIRECT    = False
 ```
 
-Os 3 ataques devem falhar após esta mudança.
+Reiniciar SP1 após a alteração. Os 3 ataques devem falhar.
 
 ---
 
@@ -171,23 +181,36 @@ Os 3 ataques devem falhar após esta mudança.
 
 ```
 gid-ipvc/
-├── docker-compose.yml          # Keycloak via Docker
-├── start.sh / stop.sh          # Arranque rápido (VPS)
+├── docker-compose.yml              # Keycloak via Docker
+├── start.sh / stop.sh              # Arranque/paragem rápida (VPS)
 ├── keycloak/
-│   └── realm-export.json       # Configuração do realm para import
-├── sp1/                        # Portal A (vulnerável)
-│   ├── app.py
-│   ├── config.py               # Flags de vulnerabilidade
+│   └── realm-export.json           # Realm para importar no Keycloak
+├── sp1/                            # Portal A — Service Provider vulnerável
+│   ├── app.py                      # Rotas Flask + lógica OIDC
+│   ├── config.py                   # Flags de vulnerabilidade
 │   └── templates/
-├── sp2/                        # Portal B (SSO)
+│       ├── landing.html            # Página de pré-login (botão SSO)
+│       ├── home.html               # Dashboard pós-login
+│       ├── profile.html            # Perfil do utilizador
+│       └── admin.html              # Área restrita (role admin)
+├── sp2/                            # Portal B — SSO demo
 │   ├── app.py
 │   └── templates/
-├── attacker/                   # Servidor do atacante
-│   ├── app.py
+├── attacker/                       # Servidor do atacante
+│   ├── app.py                      # Captura tokens, credenciais e sessões
 │   └── templates/
-├── attacks/                    # Guias e scripts de demonstração
-│   ├── a06_referrer.md
-│   ├── a07_open_redirect.md
-│   └── a09_session_fixation.py
-└── logs/                       # Logs dos serviços (gerados em runtime)
+│       ├── dashboard.html          # Painel com eventos capturados
+│       └── phishing.html           # Página de phishing (A-07)
+├── attacks/                        # Scripts e guias de demonstração
+│   ├── a06_referrer.md             # Guia A-06
+│   ├── a06_use_token.py            # Usar token capturado via Keycloak /userinfo
+│   ├── a07_open_redirect.md        # Guia A-07
+│   ├── a09_session_fixation.md     # Guia A-09
+│   └── a09_session_fixation.py     # Script de ataque A-09
+├── docs/                           # Logbooks com prints e análise
+│   ├── logbook-a06.md
+│   ├── logbook-a07.md
+│   ├── logbook-a09.md
+│   └── assets/                     # Screenshots dos logbooks
+└── logs/                           # Logs dos serviços (gerados em runtime)
 ```
