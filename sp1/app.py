@@ -26,7 +26,7 @@ os.makedirs("./flask_session", exist_ok=True)
 app.config["SESSION_TYPE"]            = "filesystem"
 app.config["SESSION_FILE_DIR"]        = "./flask_session"
 app.config["SESSION_COOKIE_NAME"]     = "sp1_session"
-app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_HTTPONLY"] = False   # A-09 VULN: permite injecção via JS (document.cookie)
 # A-09 VULN: SameSite=Lax permite que o cookie seja enviado em cross-site requests
 # MITIGAÇÃO seria SameSite=Strict
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -70,7 +70,7 @@ def require_login():
 def index():
     user = current_user()
     if not user:
-        return redirect(url_for("login"))
+        return render_template("landing.html")
     return render_template("home.html", user=user)
 
 
@@ -117,8 +117,11 @@ def callback():
         # fica agora autenticado com os dados do utilizador legítimo
         pass
     else:
-        # MITIGAÇÃO: limpar sessão e regenerar ID antes de escrever dados
+        # MITIGAÇÃO: session.clear() sozinho não chega — mantém o mesmo ID.
+        # É necessário gerar um novo SID e abandonar o antigo.
+        import secrets
         session.clear()
+        session.sid = secrets.token_urlsafe(32)
 
     # Guardar dados do utilizador na sessão
     session["user"]         = user_info
