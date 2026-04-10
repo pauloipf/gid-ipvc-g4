@@ -8,6 +8,7 @@ Laboratório de Gestão de Identidade Digital (IPVC — Mestrado em Ciberseguran
 
 # Alunos participantes
 - Iúri Carlos Carvalho Laranjeira de Sousa
+- Gonçalo Miguel Campos de Magalhães
 ---
 
 ## Arquitectura
