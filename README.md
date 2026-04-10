@@ -177,6 +177,15 @@ Reiniciar SP1 após a alteração. Os 3 ataques devem falhar.
 
 ---
 
+## Aviso — Assistência de IA
+
+Os logbooks presentes em `docs/` foram produzidos em colaboração com
+**Claude (Anthropic)**, utilizado como assistente de escrita técnica.
+O conteúdo reflecte o trabalho prático realizado pelo grupo; a IA
+auxiliou na estruturação, redacção e revisão dos documentos.
+
+---
+
 ## Estrutura do Projecto
 
 ```
